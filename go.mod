@@ -8,4 +8,7 @@ require (
 	github.com/mtlynch/gorilla-handlers v1.5.2
 )
 
-require github.com/felixge/httpsnoop v1.0.1 // indirect
+require (
+	github.com/felixge/httpsnoop v1.0.1 // indirect
+	golang.org/x/sys v0.0.0-20220319134239-a9b59b0215f8 // indirect
+)

@@ -6,3 +6,5 @@ github.com/mattn/go-sqlite3 v1.14.11 h1:gt+cp9c0XGqe9S/wAHTL3n/7MqY+siPWgWJgqdsF
 github.com/mattn/go-sqlite3 v1.14.11/go.mod h1:NyWgC/yNuGj7Q9rpYnZvas74GogHl5/Z4A/KQRfk6bU=
 github.com/mtlynch/gorilla-handlers v1.5.2 h1:CnOI7baYzjgdumJMc7Dh192JFxqGsNgRewa7NTqq9Pc=
 github.com/mtlynch/gorilla-handlers v1.5.2/go.mod h1:qZmXSCK7pPjN71Pl9ARbQX2ec1t11FI/j8bDS+ZVbmQ=
+golang.org/x/sys v0.0.0-20220319134239-a9b59b0215f8 h1:OH54vjqzRWmbJ62fjuhxy7AxFFgoHN0/DPc/UrL8cAs=
+golang.org/x/sys v0.0.0-20220319134239-a9b59b0215f8/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
