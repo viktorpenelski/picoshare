@@ -1,4 +1,4 @@
-import { uploadFile } from "./controllers/upload.js";
+import { guestUploadFile, uploadFile } from "./controllers/upload.js";
 
 const uploadEl = document.querySelector(".file");
 const resultEl = document.getElementById("upload-result");
@@ -8,6 +8,8 @@ const progressSpinner = document.getElementById("progress-spinner");
 const uploadForm = document.getElementById("upload-form");
 const expirationContainer = document.querySelector(".expiration-container");
 const expirationSelect = document.getElementById("expiration-select");
+const noteInput = document.getElementById("note");
+const uploadAnotherBtn = document.getElementById("upload-another-btn");
 
 function hideElement(el) {
   el.classList.add("is-hidden");
@@ -17,22 +19,65 @@ function showElement(el) {
   el.classList.remove("is-hidden");
 }
 
-function doUpload(file, expiration) {
+function getGuestLinkMetdata() {
+  const el = document.getElementById("guest-link-metadata");
+  if (!el) {
+    return null;
+  }
+  return JSON.parse(el.innerHTML);
+}
+
+function readNote() {
+  return noteInput.value || null;
+}
+
+function doUpload(file) {
+  const guestLinkMetadata = getGuestLinkMetdata();
+
+  if (
+    guestLinkMetadata &&
+    guestLinkMetadata.maxFileBytes &&
+    file.size > guestLinkMetadata.maxFileBytes
+  ) {
+    const friendlySize = `${guestLinkMetadata.maxFileBytes} bytes`;
+    document.getElementById(
+      "error-message"
+    ).innerText = `File is too large. Maximum upload size is ${friendlySize}.`;
+    showElement(errorContainer);
+    return;
+  }
   hideElement(errorContainer);
   hideElement(uploadForm);
   showElement(progressSpinner);
-  uploadFile(file, expiration)
+
+  let uploader = () => {
+    return uploadFile(file, expirationSelect.value, readNote());
+  };
+  if (guestLinkMetadata) {
+    uploader = () => {
+      return guestUploadFile(file, guestLinkMetadata.id);
+    };
+  }
+  uploader()
     .then((res) => {
       const entryId = res.id;
 
       const uploadLinksEl = document.createElement("upload-links");
       uploadLinksEl.fileId = entryId;
       uploadLinksEl.filename = file.name;
+      uploadLinksEl.addEventListener("link-copied", () => {
+        document
+          .querySelector("snackbar-notifications")
+          .addInfoMessage("Copied link");
+      });
       resultEl.append(uploadLinksEl);
       showElement(resultEl);
+      showElement(uploadAnotherBtn);
 
       uploadEl.style.display = "none";
-      expirationContainer.style.display = "none";
+      if (expirationContainer) {
+        expirationContainer.style.display = "none";
+      }
     })
     .catch((error) => {
       document.getElementById("error-message").innerText = error;
@@ -51,7 +96,7 @@ function resetPasteInstructions() {
 document
   .querySelector('.file-input[name="resume"]')
   .addEventListener("change", (evt) => {
-    doUpload(evt.target.files[0], expirationSelect.value);
+    doUpload(evt.target.files[0]);
   });
 
 uploadForm.addEventListener("drop", (evt) => {
@@ -65,7 +110,7 @@ uploadForm.addEventListener("drop", (evt) => {
   for (var i = 0; i < evt.dataTransfer.items.length; i++) {
     if (evt.dataTransfer.items[i].kind === "file") {
       var file = evt.dataTransfer.items[i].getAsFile();
-      doUpload(file, expirationSelect.value);
+      doUpload(file);
       return;
     }
   }
@@ -88,23 +133,31 @@ uploadEl.addEventListener("dragleave", () => {
 });
 
 pasteEl.addEventListener("paste", (evt) => {
+  const timestamp = new Date().toISOString().replaceAll(":", "");
   for (const item of evt.clipboardData.items) {
     if (item.kind === "string") {
       item.getAsString((s) => {
-        const timestamp = new Date().toISOString().replaceAll(":", "");
         doUpload(
-          new File([new Blob([s])], `pasted-${timestamp}.txt`),
-          expirationSelect.value
+          new File([new Blob([s])], `pasted-${timestamp}.txt`, {
+            type: "text/plain",
+          })
         );
       });
       return;
     }
-    const pastedFile = item.getAsFile();
+    let pastedFile = item.getAsFile();
     if (!pastedFile) {
       continue;
     }
 
-    doUpload(pastedFile, expirationSelect.value);
+    // Pasted images are named image.png by default, so make a better filename.
+    if (pastedFile.name === "image.png") {
+      pastedFile = new File([pastedFile], `pasted-${timestamp}.png`, {
+        type: pastedFile.type,
+      });
+    }
+
+    doUpload(pastedFile);
     return;
   }
 });
@@ -117,6 +170,10 @@ pasteEl.addEventListener("change", (evt) => {
 pasteEl.addEventListener("input", (evt) => {
   evt.preventDefault();
   resetPasteInstructions();
+});
+
+uploadAnotherBtn.addEventListener("click", () => {
+  window.location.reload();
 });
 
 document.addEventListener("DOMContentLoaded", function () {

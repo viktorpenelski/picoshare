@@ -3,6 +3,8 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"embed"
+	"fmt"
 	"io"
 	"log"
 	"time"
@@ -20,10 +22,24 @@ const (
 	defaultChunkSize = 32768 * 10
 )
 
-type db struct {
-	ctx       *sql.DB
-	chunkSize int
-}
+//go:embed migrations/*.sql
+var migrationsFs embed.FS
+
+type (
+	db struct {
+		ctx       *sql.DB
+		chunkSize int
+	}
+
+	dbMigration struct {
+		version int
+		query   string
+	}
+
+	rowScanner interface {
+		Scan(...interface{}) error
+	}
+)
 
 func New(path string) store.Store {
 	return NewWithChunkSize(path, defaultChunkSize)
@@ -38,26 +54,49 @@ func NewWithChunkSize(path string, chunkSize int) store.Store {
 		log.Fatalln(err)
 	}
 
-	initStmts := []string{
-		`CREATE TABLE IF NOT EXISTS entries (
-			id TEXT PRIMARY KEY,
-			filename TEXT,
-			content_type TEXT,
-			upload_time TEXT,
-			expiration_time TEXT
-			)`,
-		`CREATE TABLE IF NOT EXISTS entries_data (
-			id TEXT,
-			chunk_index INTEGER,
-			chunk BLOB,
-			FOREIGN KEY(id) REFERENCES entries(id)
-			)`,
+	stmt, err := ctx.Prepare(`PRAGMA user_version`)
+	if err != nil {
+		log.Fatalf("failed to get user_version: %v", err)
 	}
-	for _, stmt := range initStmts {
-		_, err = ctx.Exec(stmt)
-		if err != nil {
-			log.Fatalln(err)
+	defer stmt.Close()
+
+	var version int
+	err = stmt.QueryRow().Scan(&version)
+	if err != nil {
+		log.Fatalf("failed to get user_version: %v", err)
+	}
+
+	migrations, err := loadMigrations()
+	if err != nil {
+		log.Fatalf("error loading database migrations: %v", err)
+	}
+
+	log.Printf("Migration counter: %d/%d", version, len(migrations))
+
+	for _, migration := range migrations {
+		if migration.version <= version {
+			continue
 		}
+		tx, err := ctx.BeginTx(context.Background(), nil)
+		if err != nil {
+			log.Fatalf("failed to create migration transaction %d: %v", migration.version, err)
+		}
+
+		_, err = tx.Exec(migration.query)
+		if err != nil {
+			log.Fatalf("failed to perform DB migration %d: %v", migration.version, err)
+		}
+
+		_, err = tx.Exec(fmt.Sprintf(`pragma user_version=%d`, migration.version))
+		if err != nil {
+			log.Fatalf("failed to update DB version to %d: %v", migration.version, err)
+		}
+
+		if err = tx.Commit(); err != nil {
+			log.Fatalf("failed to commit migration %d: %v", migration.version, err)
+		}
+
+		log.Printf("Migration counter: %d/%d", migration.version, len(migrations))
 	}
 
 	return &db{
@@ -71,6 +110,7 @@ func (d db) GetEntriesMetadata() ([]types.UploadMetadata, error) {
 	SELECT
 		entries.id AS id,
 		entries.filename AS filename,
+		entries.note AS note,
 		entries.content_type AS content_type,
 		entries.upload_time AS upload_time,
 		entries.expiration_time AS expiration_time,
@@ -95,11 +135,12 @@ func (d db) GetEntriesMetadata() ([]types.UploadMetadata, error) {
 	for rows.Next() {
 		var id string
 		var filename string
+		var note *string
 		var contentType string
 		var uploadTimeRaw string
 		var expirationTimeRaw string
 		var fileSize int
-		err = rows.Scan(&id, &filename, &contentType, &uploadTimeRaw, &expirationTimeRaw, &fileSize)
+		err = rows.Scan(&id, &filename, &note, &contentType, &uploadTimeRaw, &expirationTimeRaw, &fileSize)
 		if err != nil {
 			return []types.UploadMetadata{}, err
 		}
@@ -117,6 +158,7 @@ func (d db) GetEntriesMetadata() ([]types.UploadMetadata, error) {
 		ee = append(ee, types.UploadMetadata{
 			ID:          types.EntryID(id),
 			Filename:    types.Filename(filename),
+			Note:        types.FileNote(note),
 			ContentType: types.ContentType(contentType),
 			Uploaded:    ut,
 			Expires:     types.ExpirationTime(et),
@@ -131,6 +173,7 @@ func (d db) GetEntry(id types.EntryID) (types.UploadEntry, error) {
 	stmt, err := d.ctx.Prepare(`
 		SELECT
 			filename,
+			note,
 			content_type,
 			upload_time,
 			expiration_time
@@ -144,10 +187,11 @@ func (d db) GetEntry(id types.EntryID) (types.UploadEntry, error) {
 	defer stmt.Close()
 
 	var filename string
+	var note *string
 	var contentType string
 	var uploadTimeRaw string
 	var expirationTimeRaw string
-	err = stmt.QueryRow(id).Scan(&filename, &contentType, &uploadTimeRaw, &expirationTimeRaw)
+	err = stmt.QueryRow(id).Scan(&filename, &note, &contentType, &uploadTimeRaw, &expirationTimeRaw)
 	if err == sql.ErrNoRows {
 		return types.UploadEntry{}, store.EntryNotFoundError{ID: id}
 	} else if err != nil {
@@ -173,6 +217,7 @@ func (d db) GetEntry(id types.EntryID) (types.UploadEntry, error) {
 		UploadMetadata: types.UploadMetadata{
 			ID:          id,
 			Filename:    types.Filename(filename),
+			Note:        types.FileNote(note),
 			ContentType: types.ContentType(contentType),
 			Uploaded:    ut,
 			Expires:     types.ExpirationTime(et),
@@ -193,12 +238,14 @@ func (d db) InsertEntry(reader io.Reader, metadata types.UploadMetadata) error {
 		entries
 	(
 		id,
+		guest_link_id,
 		filename,
+		note,
 		content_type,
 		upload_time,
 		expiration_time
 	)
-	VALUES(?,?,?,?,?)`, metadata.ID, metadata.Filename, metadata.ContentType, formatTime(metadata.Uploaded), formatTime(time.Time(metadata.Expires)))
+	VALUES(?,?,?,?,?,?,?)`, metadata.ID, metadata.GuestLinkID, metadata.Filename, metadata.Note, metadata.ContentType, formatTime(metadata.Uploaded), formatExpirationTime(metadata.Expires))
 	if err != nil {
 		log.Printf("insert into entries table failed, aborting transaction: %v", err)
 		return err
@@ -246,6 +293,173 @@ func (d db) DeleteEntry(id types.EntryID) error {
 	}
 
 	return tx.Commit()
+}
+
+func (d db) GetGuestLink(id types.GuestLinkID) (types.GuestLink, error) {
+	stmt, err := d.ctx.Prepare(`
+		SELECT
+			guest_links.id AS id,
+			guest_links.label AS label,
+			guest_links.max_file_bytes AS max_file_bytes,
+			guest_links.max_file_uploads AS max_file_uploads,
+			guest_links.creation_time AS creation_time,
+			guest_links.expiration_time AS expiration_time,
+			SUM(CASE WHEN entries.id IS NOT NULL THEN 1 ELSE 0 END) AS entry_count
+		FROM
+			guest_links
+		LEFT JOIN
+			entries ON guest_links.id = entries.guest_link_id
+		WHERE
+			guest_links.id=?
+		GROUP BY
+			guest_links.id`)
+	if err != nil {
+		return types.GuestLink{}, err
+	}
+	defer stmt.Close()
+
+	return guestLinkFromRow(stmt.QueryRow(id))
+}
+
+func (d db) GetGuestLinks() ([]types.GuestLink, error) {
+	rows, err := d.ctx.Query(`
+		SELECT
+			guest_links.id AS id,
+			guest_links.label AS label,
+			guest_links.max_file_bytes AS max_file_bytes,
+			guest_links.max_file_uploads AS max_file_uploads,
+			guest_links.creation_time AS creation_time,
+			guest_links.expiration_time AS expiration_time,
+			SUM(CASE WHEN entries.id IS NOT NULL THEN 1 ELSE 0 END) AS entry_count
+		FROM
+			guest_links
+		LEFT JOIN
+			entries ON guest_links.id = entries.guest_link_id
+		GROUP BY
+			guest_links.id`)
+	if err != nil {
+		return []types.GuestLink{}, err
+	}
+
+	gls := []types.GuestLink{}
+	for rows.Next() {
+		gl, err := guestLinkFromRow(rows)
+		if err != nil {
+			return []types.GuestLink{}, err
+		}
+
+		gls = append(gls, gl)
+	}
+
+	return gls, nil
+}
+
+func (d *db) InsertGuestLink(guestLink types.GuestLink) error {
+	log.Printf("saving new guest link %s", guestLink.ID)
+
+	if _, err := d.ctx.Exec(`
+	INSERT INTO guest_links
+		(
+			id,
+			label,
+			max_file_bytes,
+			max_file_uploads,
+			creation_time,
+			expiration_time
+		)
+		VALUES (?,?,?,?,?,?)
+	`, guestLink.ID, guestLink.Label, guestLink.MaxFileBytes, guestLink.MaxFileUploads, formatTime(time.Now()), formatExpirationTime(guestLink.Expires)); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (d db) DeleteGuestLink(id types.GuestLinkID) error {
+	log.Printf("deleting guest link %s", id)
+
+	tx, err := d.ctx.BeginTx(context.Background(), nil)
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.Exec(`
+	DELETE FROM
+		guest_links
+	WHERE
+		id=?`, id)
+	if err != nil {
+		log.Printf("deleting %s from guest_links table failed: %v", id, err)
+		return err
+	}
+
+	_, err = tx.Exec(`
+	UPDATE
+		entries
+	SET
+		guest_link_id = NULL
+	WHERE
+		guest_link_id = ?`, id)
+	if err != nil {
+		log.Printf("removing references to guest link %s from entries table failed: %v", id, err)
+		return err
+	}
+
+	return tx.Commit()
+}
+
+func (d db) Compact() error {
+	log.Printf("vacuuming database")
+
+	if _, err := d.ctx.Exec("VACUUM"); err != nil {
+		log.Printf("failed to vacuum database: %v", err)
+		return err
+	}
+
+	log.Printf("vacuuming complete")
+
+	return nil
+}
+
+func guestLinkFromRow(row rowScanner) (types.GuestLink, error) {
+	var id types.GuestLinkID
+	var label types.GuestLinkLabel
+	var maxFileBytes types.GuestUploadMaxFileBytes
+	var maxFileUploads types.GuestUploadCountLimit
+	var creationTimeRaw string
+	var expirationTimeRaw string
+	var filesUploaded int
+
+	err := row.Scan(&id, &label, &maxFileBytes, &maxFileUploads, &creationTimeRaw, &expirationTimeRaw, &filesUploaded)
+	if err == sql.ErrNoRows {
+		return types.GuestLink{}, store.GuestLinkNotFoundError{ID: id}
+	} else if err != nil {
+		return types.GuestLink{}, err
+	}
+
+	ct, err := parseDatetime(creationTimeRaw)
+	if err != nil {
+		return types.GuestLink{}, err
+	}
+
+	et, err := parseDatetime(expirationTimeRaw)
+	if err != nil {
+		return types.GuestLink{}, err
+	}
+
+	return types.GuestLink{
+		ID:             id,
+		Label:          label,
+		MaxFileBytes:   maxFileBytes,
+		MaxFileUploads: maxFileUploads,
+		FilesUploaded:  filesUploaded,
+		Created:        ct,
+		Expires:        types.ExpirationTime(et),
+	}, nil
+}
+
+func formatExpirationTime(et types.ExpirationTime) string {
+	return formatTime(time.Time(et))
 }
 
 func formatTime(t time.Time) string {

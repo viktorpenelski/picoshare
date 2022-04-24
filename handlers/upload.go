@@ -7,22 +7,22 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"strings"
 	"time"
 
+	"github.com/gorilla/mux"
+	"github.com/mtlynch/picoshare/v2/handlers/parse"
 	"github.com/mtlynch/picoshare/v2/random"
+	"github.com/mtlynch/picoshare/v2/store"
 	"github.com/mtlynch/picoshare/v2/types"
 )
 
 const (
-	MaxFilenameLen = 100
-	FileLifetime   = 7 * 24 * time.Hour
-	EntryIDLength  = 10
+	FileLifetime  = 7 * 24 * time.Hour
+	EntryIDLength = 10
 )
 
-var (
-	idCharacters = []rune("abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789")
-)
+// Omit visually similar characters (I,l,1), (0,O)
+var entryIDCharacters = []rune("abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789")
 
 type (
 	EntryPostResponse struct {
@@ -32,13 +32,14 @@ type (
 	fileUpload struct {
 		Reader      io.Reader
 		Filename    types.Filename
+		Note        types.FileNote
 		ContentType types.ContentType
 	}
 )
 
 func (s Server) entryPost() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		expiration, err := parseExpiration(r)
+		expiration, err := parseExpirationFromRequest(r)
 		if err != nil {
 			log.Printf("invalid expiration URL parameter: %v", err)
 			http.Error(w, fmt.Sprintf("Invalid expiration URL parameter: %v", err), http.StatusBadRequest)
@@ -56,6 +57,7 @@ func (s Server) entryPost() http.HandlerFunc {
 		err = s.store.InsertEntry(uploadedFile.Reader,
 			types.UploadMetadata{
 				Filename:    uploadedFile.Filename,
+				Note:        uploadedFile.Note,
 				ContentType: uploadedFile.ContentType,
 				ID:          id,
 				Uploaded:    time.Now(),
@@ -76,8 +78,75 @@ func (s Server) entryPost() http.HandlerFunc {
 	}
 }
 
+func (s Server) guestEntryPost() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		guestLinkID, err := parseGuestLinkID(mux.Vars(r)["guestLinkID"])
+		if err != nil {
+			log.Printf("error parsing guest link ID: %v", err)
+			http.Error(w, fmt.Sprintf("Invalid guest link ID: %v", err), http.StatusBadRequest)
+			return
+		}
+
+		gl, err := s.store.GetGuestLink(guestLinkID)
+		if _, ok := err.(store.GuestLinkNotFoundError); ok {
+			http.Error(w, "Invalid guest link ID", http.StatusNotFound)
+			return
+		} else if err != nil {
+			log.Printf("error retrieving guest link with ID %v: %v", guestLinkID, err)
+			http.Error(w, "Failed to retrieve guest link", http.StatusInternalServerError)
+			return
+		}
+
+		if !gl.IsActive() {
+			http.Error(w, "Guest link is no longer active", http.StatusUnauthorized)
+		}
+
+		if gl.MaxFileBytes != types.GuestUploadUnlimitedFileSize {
+			// We technically allow slightly less than the user specified because
+			// other fields in the request take up some space, but it's a difference
+			// of only a few hundred bytes.
+			r.Body = http.MaxBytesReader(w, r.Body, int64(*gl.MaxFileBytes))
+		}
+
+		uploadedFile, err := fileFromRequest(w, r)
+		if err != nil {
+			log.Printf("error reading body: %v", err)
+			http.Error(w, fmt.Sprintf("can't read request body: %s", err), http.StatusBadRequest)
+			return
+		}
+
+		if uploadedFile.Note != nil {
+			http.Error(w, "Guest uploads cannot have file notes", http.StatusBadRequest)
+			return
+		}
+
+		id := generateEntryID()
+		err = s.store.InsertEntry(uploadedFile.Reader,
+			types.UploadMetadata{
+				Filename:    uploadedFile.Filename,
+				ContentType: uploadedFile.ContentType,
+				ID:          id,
+				GuestLinkID: guestLinkID,
+				Uploaded:    time.Now(),
+				Expires:     types.NeverExpire,
+			})
+		if err != nil {
+			log.Printf("failed to save entry: %v", err)
+			http.Error(w, "can't save entry", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(EntryPostResponse{
+			ID: string(id),
+		}); err != nil {
+			panic(err)
+		}
+	}
+}
+
 func generateEntryID() types.EntryID {
-	return types.EntryID(random.String(EntryIDLength, idCharacters))
+	return types.EntryID(random.String(EntryIDLength, entryIDCharacters))
 }
 
 func parseEntryID(s string) (types.EntryID, error) {
@@ -87,7 +156,7 @@ func parseEntryID(s string) (types.EntryID, error) {
 
 	// We could do this outside the function and store the result.
 	idCharsHash := map[rune]bool{}
-	for _, c := range idCharacters {
+	for _, c := range entryIDCharacters {
 		idCharsHash[c] = true
 	}
 
@@ -109,7 +178,11 @@ func fileFromRequest(w http.ResponseWriter, r *http.Request) (fileUpload, error)
 		return fileUpload{}, err
 	}
 
-	filename, err := parseFilename(metadata.Filename)
+	if metadata.Size == 0 {
+		return fileUpload{}, errors.New("file is empty")
+	}
+
+	filename, err := parse.Filename(metadata.Filename)
 	if err != nil {
 		return fileUpload{}, err
 	}
@@ -119,24 +192,17 @@ func fileFromRequest(w http.ResponseWriter, r *http.Request) (fileUpload, error)
 		return fileUpload{}, err
 	}
 
+	note, err := parse.FileNote(r.FormValue("note"))
+	if err != nil {
+		return fileUpload{}, err
+	}
+
 	return fileUpload{
 		Reader:      reader,
 		Filename:    filename,
+		Note:        note,
 		ContentType: contentType,
 	}, nil
-}
-
-func parseFilename(s string) (types.Filename, error) {
-	if len(s) > MaxFilenameLen {
-		return types.Filename(""), errors.New("filename too long")
-	}
-	if s == "." || strings.HasPrefix(s, "..") {
-		return types.Filename(""), errors.New("illegal filename")
-	}
-	if strings.ContainsAny(s, "\\") {
-		return types.Filename(""), errors.New("illegal characters in filename")
-	}
-	return types.Filename(s), nil
 }
 
 func parseContentType(s string) (types.ContentType, error) {
@@ -145,7 +211,7 @@ func parseContentType(s string) (types.ContentType, error) {
 	return types.ContentType(s), nil
 }
 
-func parseExpiration(r *http.Request) (types.ExpirationTime, error) {
+func parseExpirationFromRequest(r *http.Request) (types.ExpirationTime, error) {
 	expirationRaw, ok := r.URL.Query()["expiration"]
 	if !ok {
 		return types.ExpirationTime{}, errors.New("missing required URL parameter: expiration")
@@ -153,7 +219,11 @@ func parseExpiration(r *http.Request) (types.ExpirationTime, error) {
 	if len(expirationRaw) <= 0 {
 		return types.ExpirationTime{}, errors.New("missing required URL parameter: expiration")
 	}
-	expiration, err := time.Parse(time.RFC3339, expirationRaw[0])
+	return parseExpiration(expirationRaw[0])
+}
+
+func parseExpiration(expirationRaw string) (types.ExpirationTime, error) {
+	expiration, err := time.Parse(time.RFC3339, expirationRaw)
 	if err != nil {
 		log.Printf("invalid expiration URL parameter: %v -> %v", expirationRaw, err)
 		return types.ExpirationTime{}, errors.New("invalid expiration URL parameter")
