@@ -17,6 +17,7 @@ type Store interface {
 	InsertGuestLink(types.GuestLink) error
 	DeleteGuestLink(types.GuestLinkID) error
 	Compact() error
+	GetDbPath() string  // TODO(vik): should this be part of the Store interface?
 }
 
 // EntryNotFoundError occurs when no entry exists with the given ID.

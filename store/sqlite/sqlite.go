@@ -29,6 +29,7 @@ type (
 	db struct {
 		ctx       *sql.DB
 		chunkSize int
+		path	  string
 	}
 
 	dbMigration struct {
@@ -102,6 +103,7 @@ func NewWithChunkSize(path string, chunkSize int) store.Store {
 	return &db{
 		ctx:       ctx,
 		chunkSize: chunkSize,
+		path: 	   path,
 	}
 }
 
@@ -419,6 +421,10 @@ func (d db) Compact() error {
 	log.Printf("vacuuming complete")
 
 	return nil
+}
+
+func (d db) GetDbPath() string {
+	return d.path
 }
 
 func guestLinkFromRow(row rowScanner) (types.GuestLink, error) {
