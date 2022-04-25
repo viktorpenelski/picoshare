@@ -35,3 +35,16 @@ form {
 .navbar .nav-item {
   font-size: 1.3em;
 }
+
+#storage-space {
+  margin-left: 1rem;
+  margin-top: 1rem;
+  font-size: 1.0em;
+}
+
+#storage-space > div {
+  padding: 0.2rem;
+  vertical-align: middle;
+  min-width: 45px;
+  display: inline-block;
+}

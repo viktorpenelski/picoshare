@@ -24,6 +24,10 @@
             <a class="navbar-item" href="/files">Files</a>
             <a class="navbar-item" href="/guest-links">Guest Links</a>
           </div>
+          <div id="storage-space" style="visibility: hidden">
+            <div><img src="/storage-space.svg"></div>
+            <div id="storage-space-info"></div>
+          </div>
         {{ end }}
         <div class="navbar-end">
           {{ if .IsAuthenticated }}
