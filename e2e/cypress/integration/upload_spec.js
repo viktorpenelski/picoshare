@@ -1,12 +1,6 @@
 it("uploads a file without specifying any parameters", () => {
   cy.visit("/");
-  cy.get('.navbar-item .button[data-test-id="log-in"]').click();
-
-  cy.location("pathname").should("eq", "/login");
-  cy.get('form input[type="password"]').type("dummypass");
-  cy.get("form").submit();
-
-  cy.location("pathname").should("eq", "/");
+  cy.login();
 
   cy.get(".file-input").attachFile("kittyface.jpg");
 
@@ -29,20 +23,18 @@ it("uploads a file without specifying any parameters", () => {
     .should("be.visible");
 
   cy.get('.navbar a[href="/files"]').click();
-  cy.get('.table td[test-data-id="filename"]')
-    .eq(0)
-    .should("contain", "kittyface.jpg");
+  cy.get('.table tbody tr:first-child [test-data-id="filename"]').should(
+    "contain",
+    "kittyface.jpg"
+  );
+  cy.get('.table tbody tr:first-child [test-data-id="note"]').should(
+    "not.exist"
+  );
 });
 
 it("uploads a file with a note", () => {
   cy.visit("/");
-  cy.get('.navbar-item .button[data-test-id="log-in"]').click();
-
-  cy.location("pathname").should("eq", "/login");
-  cy.get('form input[type="password"]').type("dummypass");
-  cy.get("form").submit();
-
-  cy.location("pathname").should("eq", "/");
+  cy.login();
 
   cy.get("#note").type("For Pico, with Love and Squalor");
 
@@ -67,10 +59,12 @@ it("uploads a file with a note", () => {
     .should("be.visible");
 
   cy.get('.navbar a[href="/files"]').click();
-  cy.get('.table td[test-data-id="filename"]')
-    .eq(0)
-    .should("contain", "kittyface.jpg");
-  cy.get('.table td[test-data-id="note"]')
-    .eq(0)
-    .should("contain", "For Pico, with Love and Squalor");
+  cy.get('.table tbody tr:first-child [test-data-id="filename"]').should(
+    "contain",
+    "kittyface.jpg"
+  );
+  cy.get('.table tbody tr:first-child [test-data-id="note"]').should(
+    "contain",
+    "For Pico, with Love and Squalor"
+  );
 });

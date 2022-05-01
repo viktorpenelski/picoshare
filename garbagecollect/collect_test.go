@@ -1,10 +1,9 @@
 package garbagecollect_test
 
 import (
-	"bytes"
-	"io"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -35,17 +34,17 @@ func TestCollectDoesNothingWhenStoreIsEmpty(t *testing.T) {
 func TestCollectExpiredFile(t *testing.T) {
 	dataStore := test_sqlite.New()
 	d := "dummy data"
-	dataStore.InsertEntry(makeData(d),
+	dataStore.InsertEntry(strings.NewReader(d),
 		types.UploadMetadata{
 			ID:      types.EntryID("AAAAAAAAAAAA"),
 			Expires: mustParseExpirationTime("2000-01-01T00:00:00Z"),
 		})
-	dataStore.InsertEntry(makeData(d),
+	dataStore.InsertEntry(strings.NewReader(d),
 		types.UploadMetadata{
 			ID:      types.EntryID("BBBBBBBBBBBB"),
 			Expires: mustParseExpirationTime("3000-01-01T00:00:00Z"),
 		})
-	dataStore.InsertEntry(makeData(d),
+	dataStore.InsertEntry(strings.NewReader(d),
 		types.UploadMetadata{
 			ID:      types.EntryID("CCCCCCCCCCCC"),
 			Expires: types.NeverExpire,
@@ -66,12 +65,12 @@ func TestCollectExpiredFile(t *testing.T) {
 		{
 			ID:      types.EntryID("BBBBBBBBBBBB"),
 			Expires: mustParseExpirationTime("3000-01-01T00:00:00Z"),
-			Size:    len(d),
+			Size:    int64(len(d)),
 		},
 		{
 			ID:      types.EntryID("CCCCCCCCCCCC"),
 			Expires: types.NeverExpire,
-			Size:    len(d),
+			Size:    int64(len(d)),
 		},
 	}
 	if !reflect.DeepEqual(expected, remaining) {
@@ -82,17 +81,17 @@ func TestCollectExpiredFile(t *testing.T) {
 func TestCollectDoesNothingWhenNoFilesAreExpired(t *testing.T) {
 	dataStore := test_sqlite.New()
 	d := "dummy data"
-	dataStore.InsertEntry(makeData(d),
+	dataStore.InsertEntry(strings.NewReader(d),
 		types.UploadMetadata{
 			ID:      types.EntryID("AAAAAAAAAAAA"),
 			Expires: mustParseExpirationTime("4000-01-01T00:00:00Z"),
 		})
-	dataStore.InsertEntry(makeData(d),
+	dataStore.InsertEntry(strings.NewReader(d),
 		types.UploadMetadata{
 			ID:      types.EntryID("BBBBBBBBBBBB"),
 			Expires: mustParseExpirationTime("3000-01-01T00:00:00Z"),
 		})
-	dataStore.InsertEntry(makeData(d),
+	dataStore.InsertEntry(strings.NewReader(d),
 		types.UploadMetadata{
 			ID:      types.EntryID("CCCCCCCCCCCC"),
 			Expires: types.NeverExpire,
@@ -118,26 +117,22 @@ func TestCollectDoesNothingWhenNoFilesAreExpired(t *testing.T) {
 		{
 			ID:      types.EntryID("AAAAAAAAAAAA"),
 			Expires: mustParseExpirationTime("4000-01-01T00:00:00Z"),
-			Size:    len(d),
+			Size:    int64(len(d)),
 		},
 		{
 			ID:      types.EntryID("BBBBBBBBBBBB"),
 			Expires: mustParseExpirationTime("3000-01-01T00:00:00Z"),
-			Size:    len(d),
+			Size:    int64(len(d)),
 		},
 		{
 			ID:      types.EntryID("CCCCCCCCCCCC"),
 			Expires: types.NeverExpire,
-			Size:    len(d),
+			Size:    int64(len(d)),
 		},
 	}
 	if !reflect.DeepEqual(expected, remaining) {
 		t.Fatalf("unexpected results in datastore: got %v, want %v", remaining, expected)
 	}
-}
-
-func makeData(s string) io.Reader {
-	return bytes.NewReader([]byte(s))
 }
 
 func mustParseExpirationTime(s string) types.ExpirationTime {

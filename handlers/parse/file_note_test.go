@@ -27,6 +27,16 @@ func TestFileNote(t *testing.T) {
 			valid:       false,
 		},
 		{
+			description: "literal null string",
+			input:       "null",
+			valid:       false,
+		},
+		{
+			description: "literal undefined string",
+			input:       "undefined",
+			valid:       false,
+		},
+		{
 			description: "contains a <script> tag",
 			input:       "<script>alert(1)</script>",
 			valid:       false,
@@ -50,13 +60,13 @@ func TestFileNote(t *testing.T) {
 			if !tt.valid {
 				return
 			}
-			if got, want := note, tt.output; got == nil || *got != *want {
-				t.Errorf("note=%v, want=%v", *note, *want)
+			if got, want := note.String(), tt.output.String(); got != want {
+				t.Errorf("note=%v, want=%v", note, want)
 			}
 		})
 	}
 }
 
 func makeFileNote(s string) types.FileNote {
-	return types.FileNote(&s)
+	return types.FileNote{Value: &s}
 }

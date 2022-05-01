@@ -8,9 +8,12 @@ import (
 type (
 	EntryID        string
 	Filename       string
-	FileNote       *string
 	ContentType    string
 	ExpirationTime time.Time
+
+	FileNote struct {
+		Value *string
+	}
 
 	UploadMetadata struct {
 		ID          EntryID
@@ -20,7 +23,7 @@ type (
 		ContentType ContentType
 		Uploaded    time.Time
 		Expires     ExpirationTime
-		Size        int
+		Size        int64
 	}
 
 	UploadEntry struct {
@@ -34,4 +37,11 @@ var NeverExpire = ExpirationTime(time.Date(2999, time.December, 31, 0, 0, 0, 0, 
 
 func (et ExpirationTime) String() string {
 	return (time.Time(et)).String()
+}
+
+func (n FileNote) String() string {
+	if n.Value == nil {
+		return "<nil>"
+	}
+	return *n.Value
 }
