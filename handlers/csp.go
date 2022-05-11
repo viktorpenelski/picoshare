@@ -1,13 +1,25 @@
 package handlers
 
 import (
+	"context"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"strings"
+
+	"github.com/mtlynch/picoshare/v2/random"
 )
+
+type contextKey struct {
+	name string
+}
+
+var contextKeyCSPNonce = &contextKey{"csp-nonce"}
 
 func enforceContentSecurityPolicy(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		nonce := base64.StdEncoding.EncodeToString(random.Bytes(16))
+
 		type cspDirective struct {
 			name   string
 			values []string
@@ -23,13 +35,16 @@ func enforceContentSecurityPolicy(next http.Handler) http.Handler {
 				name: "script-src",
 				values: []string{
 					"self",
-					"unsafe-inline",
+					"nonce-" + nonce,
 				},
 			},
 			{
 				name: "style-src",
 				values: []string{
 					"self",
+					// Firefox refuses to load an inline <style> tag in an HTML custom
+					// element, even if we specify a nonce:
+					// https://github.com/mtlynch/picoshare/issues/249
 					"unsafe-inline",
 				},
 			},
@@ -45,6 +60,16 @@ func enforceContentSecurityPolicy(next http.Handler) http.Handler {
 		policy := strings.Join(policyParts, "; ") + ";"
 
 		w.Header().Set("Content-Security-Policy", policy)
-		next.ServeHTTP(w, r)
+
+		ctx := context.WithValue(r.Context(), contextKeyCSPNonce, nonce)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+func cspNonce(ctx context.Context) string {
+	key, ok := ctx.Value(contextKeyCSPNonce).(string)
+	if !ok {
+		panic("CSP nonce is missing from request context")
+	}
+	return key
 }

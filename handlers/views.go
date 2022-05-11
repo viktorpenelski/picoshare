@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"fmt"
 	"html/template"
 	"io/ioutil"
@@ -20,21 +21,19 @@ import (
 type commonProps struct {
 	Title           string
 	IsAuthenticated bool
+	CspNonce        string
 }
 
 func (s Server) indexGet() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if s.isAuthenticated(r) {
+		if isAuthenticated(r.Context()) {
 			s.uploadGet()(w, r)
 			return
 		}
 		if err := renderTemplate(w, "index.html", struct {
 			commonProps
 		}{
-			commonProps{
-				Title:           "PicoShare",
-				IsAuthenticated: s.isAuthenticated(r),
-			},
+			commonProps: makeCommonProps("PicoShare", r.Context()),
 		}, template.FuncMap{}); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -59,11 +58,8 @@ func (s Server) guestLinkIndexGet() http.HandlerFunc {
 			commonProps
 			GuestLinks []types.GuestLink
 		}{
-			commonProps: commonProps{
-				Title:           "PicoShare - Guest Links",
-				IsAuthenticated: s.isAuthenticated(r),
-			},
-			GuestLinks: links,
+			commonProps: makeCommonProps("PicoShare - Guest Links", r.Context()),
+			GuestLinks:  links,
 		}, template.FuncMap{
 			"formatDate": func(t time.Time) string {
 				return t.Format("2006-01-02")
@@ -124,10 +120,7 @@ func (s Server) guestLinksNewGet() http.HandlerFunc {
 			commonProps
 			ExpirationOptions []expirationOption
 		}{
-			commonProps: commonProps{
-				Title:           "PicoShare - New Guest Link",
-				IsAuthenticated: s.isAuthenticated(r),
-			},
+			commonProps: makeCommonProps("PicoShare - New Guest Link", r.Context()),
 			ExpirationOptions: []expirationOption{
 				{"1 day", time.Now().AddDate(0, 0, 1), false},
 				{"7 days", time.Now().AddDate(0, 0, 7), false},
@@ -160,11 +153,8 @@ func (s Server) fileIndexGet() http.HandlerFunc {
 			commonProps
 			Files []types.UploadMetadata
 		}{
-			commonProps: commonProps{
-				Title:           "PicoShare - Files",
-				IsAuthenticated: s.isAuthenticated(r),
-			},
-			Files: em,
+			commonProps: makeCommonProps("PicoShare - Files", r.Context()),
+			Files:       em,
 		}, template.FuncMap{
 			"formatDate": func(t time.Time) string {
 				return t.Format("2006-01-02")
@@ -197,15 +187,75 @@ func (s Server) fileIndexGet() http.HandlerFunc {
 	}
 }
 
+func (s Server) fileEditGet() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := parseEntryID(mux.Vars(r)["id"])
+		if err != nil {
+			log.Printf("error parsing ID: %v", err)
+			http.Error(w, fmt.Sprintf("bad entry ID: %v", err), http.StatusBadRequest)
+			return
+		}
+
+		metadata, err := s.store.GetEntryMetadata(id)
+		if _, ok := err.(store.EntryNotFoundError); ok {
+			http.Error(w, "entry not found", http.StatusNotFound)
+			return
+		} else if err != nil {
+			log.Printf("error retrieving entry with id %v: %v", id, err)
+			http.Error(w, "failed to retrieve entry", http.StatusInternalServerError)
+			return
+		}
+
+		if err := renderTemplate(w, "file-edit.html", struct {
+			commonProps
+			Metadata types.UploadMetadata
+		}{
+			commonProps: makeCommonProps("PicoShare - Edit", r.Context()),
+			Metadata:    metadata,
+		}, template.FuncMap{}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+}
+
+func (s Server) fileConfirmDeleteGet() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := parseEntryID(mux.Vars(r)["id"])
+		if err != nil {
+			log.Printf("error parsing ID: %v", err)
+			http.Error(w, fmt.Sprintf("bad entry ID: %v", err), http.StatusBadRequest)
+			return
+		}
+
+		metadata, err := s.store.GetEntryMetadata(id)
+		if _, ok := err.(store.EntryNotFoundError); ok {
+			http.Error(w, "entry not found", http.StatusNotFound)
+			return
+		} else if err != nil {
+			log.Printf("error retrieving entry with id %v: %v", id, err)
+			http.Error(w, "failed to retrieve entry", http.StatusInternalServerError)
+			return
+		}
+		if err := renderTemplate(w, "file-delete.html", struct {
+			commonProps
+			Metadata types.UploadMetadata
+		}{
+			commonProps: makeCommonProps("PicoShare - Delete", r.Context()),
+			Metadata:    metadata,
+		}, template.FuncMap{}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+}
+
 func (s Server) authGet() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := renderTemplate(w, "auth.html", struct {
 			commonProps
 		}{
-			commonProps{
-				Title:           "PicoShare - Log in",
-				IsAuthenticated: s.isAuthenticated(r),
-			},
+			commonProps: makeCommonProps("PicoShare - Log in", r.Context()),
 		}, template.FuncMap{}); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -226,10 +276,7 @@ func (s Server) uploadGet() http.HandlerFunc {
 			MaxNoteLength     int
 			GuestLinkMetadata types.GuestLink
 		}{
-			commonProps: commonProps{
-				Title:           "PicoShare - Upload",
-				IsAuthenticated: s.isAuthenticated(r),
-			},
+			commonProps:   makeCommonProps("PicoShare - Upload", r.Context()),
 			MaxNoteLength: parse.MaxFileNoteLen,
 			ExpirationOptions: []expirationOption{
 				{"1 day", time.Now().AddDate(0, 0, 1), false},
@@ -271,10 +318,7 @@ func (s Server) guestUploadGet() http.HandlerFunc {
 			if err := renderTemplate(w, "guest-link-inactive.html", struct {
 				commonProps
 			}{
-				commonProps: commonProps{
-					Title:           "PicoShare - Guest Link Inactive",
-					IsAuthenticated: s.isAuthenticated(r),
-				},
+				commonProps: makeCommonProps("PicoShare - Guest Link Inactive", r.Context()),
 			}, template.FuncMap{}); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
@@ -287,10 +331,7 @@ func (s Server) guestUploadGet() http.HandlerFunc {
 			ExpirationOptions []interface{}
 			GuestLinkMetadata types.GuestLink
 		}{
-			commonProps: commonProps{
-				Title:           "PicoShare - Upload",
-				IsAuthenticated: s.isAuthenticated(r),
-			},
+			commonProps:       makeCommonProps("PicoShare - Upload", r.Context()),
 			GuestLinkMetadata: gl,
 		}, template.FuncMap{
 			"formatExpiration": func(t time.Time) string {
@@ -299,6 +340,14 @@ func (s Server) guestUploadGet() http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+	}
+}
+
+func makeCommonProps(title string, ctx context.Context) commonProps {
+	return commonProps{
+		Title:           title,
+		IsAuthenticated: isAuthenticated(ctx),
+		CspNonce:        cspNonce(ctx),
 	}
 }
 

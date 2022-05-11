@@ -41,7 +41,7 @@
 
     <body>
       {{ template "custom-elements" . }}
-      {{ template "snackbar-notifications.html" }}
+      {{ template "snackbar-notifications.html" . }}
 
       {{ template "navbar" . }}
 
@@ -52,7 +52,7 @@
         </div>
       </section>
 
-      <snackbar-notifications />
+      <snackbar-notifications></snackbar-notifications>
     </body>
   </html>
 {{ end }}
