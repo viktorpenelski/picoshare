@@ -36,15 +36,18 @@ form {
   font-size: 1.3em;
 }
 
+.navbar-dropdown {
+  left: unset;
+  right: 0;
+}
+
 #storage-space {
-  margin-left: 1rem;
-  margin-top: 1rem;
   font-size: 1.0em;
 }
 
 #storage-space > div {
-  padding: 0.2rem;
   vertical-align: middle;
-  min-width: 45px;
+  min-width: 55px;
+  min-height: 50px;
   display: inline-block;
 }

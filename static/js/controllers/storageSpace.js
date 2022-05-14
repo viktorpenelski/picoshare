@@ -8,13 +8,10 @@ example 200 OK response:
   "used":895.11,
   "usedPercentage":96.09
 }
-
-example 404 Not Found response:
-
-"Could not fetch storage space info, likely unsupported OS."
-
 */
 export async function getStorageSpaceOrNull() {
+  // this API call is expected to fail on unsupported OSes, so we want to gracefully
+  // fail on errors.
   return fetch(`/api/storage-space`, {
     method: "GET",
     credentials: "include",

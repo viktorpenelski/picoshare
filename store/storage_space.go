@@ -28,7 +28,7 @@ func unixStorageSpaceFrom(path string) (*StorageSpaceInBytes, error) {
 
 func FromDbPath(dbPath string) (*StorageSpaceInBytes, error) {
 	// only tested on a linux distribution so far. 
-	// Maybe the same implementation works on other unix OSs as well?
+	// Maybe the same implementation works on other unix OSs as well and we can just let it error out when unsupported?
 	if runtime.GOOS != "linux" {
 		return nil, errors.New("Storage space not supported on " + runtime.GOOS)
 	}
